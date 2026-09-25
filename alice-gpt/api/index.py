@@ -5,19 +5,24 @@ from openai import OpenAI
 
 app = FastAPI()
 
-# Инициализация прямого клиента OpenAI через переменную окружения
+# Клиент OpenAI
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 def clean_for_speech(text: str) -> str:
-    """Удаляет markdown, ссылки и спецсимволы, чтобы колонка не читала их вслух."""
+    """Удаление markdown и спецсимволов для чистого голосового ответа"""
     text = re.sub(r'https?://\S+|www\.\S+', '', text)
     text = re.sub(r'[*_#`~>\[\]\(\)]', '', text)
     text = re.sub(r'\n+', ' ', text)
     return text.strip()
 
-@app.post("/")
-@app.post("/api")
-async def yandex_webhook(request: Request):
+# Принимаем любые пути и методы (GET и POST), чтобы никогда не возникало 404
+@app.api_route("/{path:path}", methods=["GET", "POST"])
+@app.api_route("/", methods=["GET", "POST"])
+async def yandex_webhook(request: Request, path: str = ""):
+    # Ответ на проверку доступности браузером или пингом
+    if request.method == "GET":
+        return {"status": "ok", "message": "Alice GPT Webhook is running"}
+
     req_data = await request.json()
     
     session = req_data.get("session", {})
@@ -47,7 +52,7 @@ async def yandex_webhook(request: Request):
             }
         }
 
-    # Обращение к OpenAI (модель gpt-4o-mini отвечает быстрее всего — около 1 сек)
+    # Запрос к ChatGPT
     try:
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -56,13 +61,13 @@ async def yandex_webhook(request: Request):
                     "role": "system",
                     "content": (
                         "Ты голосовой ассистент на Яндекс Станции. "
-                        "Отвечай кратко, ёмко и простым языком (максимум 2-3 предложения). "
+                        "Отвечай кратко, ёмко и понятно на слух (не более 2-3 предложений). "
                         "Не используй списки, markdown, спецсимволы и ссылки."
                     )
                 },
                 {"role": "user", "content": user_command}
             ],
-            max_tokens=150,     # Жесткий лимит токенов для соблюдения 3-секундного окна Яндекса
+            max_tokens=150,
             temperature=0.7
         )
         answer = completion.choices[0].message.content
