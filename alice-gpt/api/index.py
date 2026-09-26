@@ -5,13 +5,14 @@ from openai import OpenAI
 
 app = FastAPI()
 
-# Открытый бесплатный шлюз (не требует регистрации и VPN)
+# Подключение к сверхбыстрому шлюзу Groq
 client = OpenAI(
-    api_key="dummy",
-    base_url="https://text.pollinations.ai/openai"
+    api_key=os.environ.get("OPENAI_API_KEY"),
+    base_url="https://api.groq.com/openai/v1"
 )
 
 def clean_for_speech(text: str) -> str:
+    """Удаляет markdown, ссылки и спецсимволы для чистого произношения колонкой"""
     text = re.sub(r'https?://\S+|www\.\S+', '', text)
     text = re.sub(r'[*_#`~>\[\]\(\)]', '', text)
     text = re.sub(r'\n+', ' ', text)
@@ -20,8 +21,9 @@ def clean_for_speech(text: str) -> str:
 @app.api_route("/{path:path}", methods=["GET", "POST"])
 @app.api_route("/", methods=["GET", "POST"])
 async def yandex_webhook(request: Request, path: str = ""):
+    # Ответ на технические проверки
     if request.method == "GET":
-        return {"status": "ok", "message": "Alice GPT Webhook is running"}
+        return {"status": "ok", "message": "Alice Groq Webhook is running"}
 
     req_data = await request.json()
     session = req_data.get("session", {})
@@ -29,16 +31,18 @@ async def yandex_webhook(request: Request, path: str = ""):
     user_command = request_obj.get("original_utterance", "").strip()
     is_new_session = session.get("new", False)
 
+    # Приветствие при старте диалога
     if is_new_session or not user_command:
         return {
             "version": req_data.get("version", "1.0"),
             "session": session,
             "response": {
-                "text": "Привет! Я голосовой помощник на базе нейросети. О чём хотите поговорить?",
+                "text": "Привет! Я на связи через Ламу. О чём спросите?",
                 "end_session": False
             }
         }
 
+    # Выход по ключевым словам
     if user_command.lower() in ["стоп", "выход", "хватит", "пока"]:
         return {
             "version": req_data.get("version", "1.0"),
@@ -49,15 +53,16 @@ async def yandex_webhook(request: Request, path: str = ""):
             }
         }
 
+    # Запрос к передовой модели Llama 3.3 70B (отвечает за 0.3-0.5 сек)
     try:
         completion = client.chat.completions.create(
-            model="openai",  # Использует базовую модель GPT бесплатно
+            model="llama-3.3-70b-versatile",
             messages=[
                 {
                     "role": "system",
                     "content": (
                         "Ты голосовой ассистент на Яндекс Станции. "
-                        "Отвечай на русском языке кратко, ёмко и понятно на слух (не более 2-3 предложений). "
+                        "Отвечай на русском языке кратко, ёмко и понятно на слух (максимум 2-3 предложения). "
                         "Не используй списки, markdown, спецсимволы и ссылки."
                     )
                 },
@@ -69,7 +74,8 @@ async def yandex_webhook(request: Request, path: str = ""):
         answer = completion.choices[0].message.content
         answer_text = clean_for_speech(answer)
     except Exception as e:
-        answer_text = "Не удалось связаться с нейросетью. Попробуйте еще раз."
+        print(f"Ошибка Groq: {e}")
+        answer_text = "Не удалось связаться с нейросетью. Попробуйте повторить вопрос."
 
     return {
         "version": req_data.get("version", "1.0"),
