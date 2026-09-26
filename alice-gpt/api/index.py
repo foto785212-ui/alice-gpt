@@ -5,14 +5,8 @@ from openai import OpenAI
 
 app = FastAPI()
 
-# Подключение к сверхбыстрому шлюзу Groq
-client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY"),
-    base_url="https://api.groq.com/openai/v1"
-)
-
 def clean_for_speech(text: str) -> str:
-    """Удаляет markdown, ссылки и спецсимволы для чистого произношения колонкой"""
+    """Очистка текста от markdown для голосового ответа"""
     text = re.sub(r'https?://\S+|www\.\S+', '', text)
     text = re.sub(r'[*_#`~>\[\]\(\)]', '', text)
     text = re.sub(r'\n+', ' ', text)
@@ -21,17 +15,22 @@ def clean_for_speech(text: str) -> str:
 @app.api_route("/{path:path}", methods=["GET", "POST"])
 @app.api_route("/", methods=["GET", "POST"])
 async def yandex_webhook(request: Request, path: str = ""):
-    # Ответ на технические проверки
+    # Проверка работы через браузер
     if request.method == "GET":
         return {"status": "ok", "message": "Alice Groq Webhook is running"}
 
-    req_data = await request.json()
+    # Безопасное чтение JSON-запроса от Яндекса
+    try:
+        req_data = await request.json()
+    except Exception:
+        req_data = {}
+
     session = req_data.get("session", {})
     request_obj = req_data.get("request", {})
     user_command = request_obj.get("original_utterance", "").strip()
     is_new_session = session.get("new", False)
 
-    # Приветствие при старте диалога
+    # Приветствие при старте сессии
     if is_new_session or not user_command:
         return {
             "version": req_data.get("version", "1.0"),
@@ -53,8 +52,24 @@ async def yandex_webhook(request: Request, path: str = ""):
             }
         }
 
-    # Запрос к передовой модели Llama 3.3 70B (отвечает за 0.3-0.5 сек)
+    # Получаем ключ (поддерживаем оба варианта названия переменной)
+    api_key = os.environ.get("GROQ_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {
+            "version": req_data.get("version", "1.0"),
+            "session": session,
+            "response": {
+                "text": "Ошибка: ключ API не найден в переменных Vercel. Добавьте GROQ_API_KEY в настройках проекта.",
+                "end_session": False
+            }
+        }
+
+    # Обращение к Groq
     try:
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.groq.com/openai/v1"
+        )
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -62,7 +77,7 @@ async def yandex_webhook(request: Request, path: str = ""):
                     "role": "system",
                     "content": (
                         "Ты голосовой ассистент на Яндекс Станции. "
-                        "Отвечай на русском языке кратко, ёмко и понятно на слух (максимум 2-3 предложения). "
+                        "Отвечай на русском языке кратко, ёмко и понятно на слух (не более 2-3 предложений). "
                         "Не используй списки, markdown, спецсимволы и ссылки."
                     )
                 },
@@ -74,8 +89,8 @@ async def yandex_webhook(request: Request, path: str = ""):
         answer = completion.choices[0].message.content
         answer_text = clean_for_speech(answer)
     except Exception as e:
-        print(f"Ошибка Groq: {e}")
-        answer_text = "Не удалось связаться с нейросетью. Попробуйте повторить вопрос."
+        print(f"Ошибка вызова модели: {e}")
+        answer_text = f"Ошибка от Groq: {str(e)[:120]}"
 
     return {
         "version": req_data.get("version", "1.0"),
